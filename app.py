@@ -3,596 +3,652 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from matplotlib.gridspec import GridSpec
+from openai import OpenAI
+import base64
+import json
 import io
 import textwrap
-import hashlib
+import re
 
-st.set_page_config(
-    page_title="CoreLog-AI | Geological Master Dashboard",
-    page_icon="⛏️",
-    layout="wide"
-)
+# ==========================================================
+# CORELOG-AI REAL VISION VERSION
+# Developed for AI-assisted geological core/chip logging
+# ==========================================================
 
-st.title("⛏️ CoreLog-AI | Geological Master Dashboard")
-st.caption("Professional core/outcrop log panel: lithology, alteration, mineralization, RQD, structure, ore-system reasoning.")
+st.set_page_config(page_title="CoreLog-AI Vision Logger", layout="wide")
 
-# ============================================================
-# DATABASE
-# ============================================================
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-LITHOLOGY = {
-    "Granite": ("GRN", "Granit", "#f7b7b7", ".", "Intrusive"),
-    "Granodiorite": ("GDR", "Granodiyorit", "#e59a9a", ".", "Intrusive"),
-    "Diorite": ("DIO", "Diyorit", "#8d99ae", "o", "Intrusive"),
-    "Tonalite": ("TON", "Tonalit", "#c9a0dc", "+", "Intrusive"),
-    "Gabbro": ("GAB", "Gabro", "#606c76", "o", "Intrusive"),
-
-    "Rhyolite": ("RHY", "Riyolit", "#f7c6d9", "+", "Volcanic"),
-    "Dacite": ("DAC", "Dasit", "#c9b6e4", "o", "Volcanic"),
-    "Andesite": ("AND", "Andezit", "#a9b4dc", ".", "Volcanic"),
-    "Basalt": ("BAS", "Bazalt", "#586f52", "x", "Volcanic"),
-    "Tuff": ("TFF", "Tüf", "#ead7a5", ".", "Volcanic"),
-    "Volcanic Breccia": ("VBX", "Volkanik Breş", "#b98665", "xx", "Volcanic"),
-
-    "Sandstone": ("SST", "Kumtaşı", "#efd08a", "-", "Sedimentary"),
-    "Siltstone": ("SLT", "Silttaşı", "#c8a86d", "-", "Sedimentary"),
-    "Mudstone": ("MST", "Çamurtaşı", "#7b7b7b", "-", "Sedimentary"),
-    "Shale": ("SHL", "Şeyl", "#565656", "-", "Sedimentary"),
-    "Coal": ("COL", "Kömür", "#1f1f1f", "", "Coal"),
-
-    "Limestone": ("LST", "Kireçtaşı", "#a8dadc", "+", "Carbonate"),
-    "Dolomite": ("DOL", "Dolomit", "#b7e4c7", "+", "Carbonate"),
-    "Marble": ("MRB", "Mermer", "#d8f3dc", "/", "Carbonate"),
-
-    "Schist": ("SCH", "Şist", "#90a955", "/", "Metamorphic"),
-    "Micaschist": ("MSC", "Mikaşist", "#8ecae6", "/", "Metamorphic"),
-    "Gneiss": ("GNS", "Gnays", "#adb5bd", "x", "Metamorphic"),
-    "Quartzite": ("QZT", "Kuvarsit", "#f8f9fa", "/", "Metamorphic"),
-    "Amphibolite": ("AMP", "Amfibolit", "#2d6a4f", ".", "Metamorphic"),
-
-    "Serpentinite": ("SRP", "Serpantinit", "#588157", "x", "Ultramafic"),
-    "Dunite": ("DUN", "Dunit", "#6a994e", "o", "Ultramafic"),
-    "Harzburgite": ("HZB", "Harzburjit", "#386641", "+", "Ultramafic"),
-
-    "Quartz Vein Zone": ("QVZ", "Kuvars Damar Zonu", "#ffffff", "///", "Vein"),
-    "Shear Zone": ("SHZ", "Makaslama Zonu", "#c1121f", "/", "Structure"),
-    "Fault Breccia": ("FBX", "Fay Breşi", "#bc4749", "xx", "Structure"),
-    "Gossan / Iron Oxide": ("GOX", "Gossan / Demir Oksit", "#d9480f", ".", "Ore Zone"),
-    "Massive Sulphide": ("MSU", "Masif Sülfür", "#343a40", "", "Ore Zone"),
-    "BIF / Iron Formation": ("BIF", "Bantlı Demir Formasyonu", "#6c757d", "-", "Iron"),
-    "Pegmatite": ("PEG", "Pegmatit", "#ffe5ec", "+", "Pegmatite"),
-    "Skarn": ("SKN", "Skarn", "#95d5b2", "o", "Skarn"),
-    "Unknown": ("UNK", "Belirsiz", "#e5e5e5", "", "Unknown"),
+LITHOLOGY_STYLE = {
+    "GDR": ("Granodiorite", "#f4b6bd", ".."),
+    "GRN": ("Granite", "#f5c1c1", ".."),
+    "DIO": ("Diorite", "#9aa6b2", "o"),
+    "AND": ("Andesite", "#b9c7e6", "vv"),
+    "BAS": ("Basalt", "#6b7280", "xx"),
+    "DAC": ("Dacite", "#cbb7e8", "oo"),
+    "RHY": ("Rhyolite", "#e6c8e6", "++"),
+    "TFF": ("Tuff / Lapilli Tuff", "#d9c095", "^"),
+    "VBX": ("Volcanic Breccia", "#b98b63", "xx"),
+    "QZV": ("Quartz Vein / Stockwork", "#f7f7f7", "//"),
+    "LST": ("Limestone / Marble", "#b9ddd6", "+"),
+    "DOL": ("Dolomite", "#cfd6c4", "++"),
+    "SKN": ("Skarn", "#8faa73", "xx"),
+    "BIF": ("Banded Iron Formation", "#8d7a90", "=="),
+    "SST": ("Sandstone", "#e5c48f", ".."),
+    "SHL": ("Shale / Mudstone", "#9aa0a6", "--"),
+    "CLN": ("Coal / Carbonaceous Unit", "#2d2d2d", "//"),
+    "MYL": ("Mylonite / Shear Zone", "#7c6f64", "\\\\"),
+    "FLT": ("Fault Gouge / Broken Zone", "#c2b280", "**"),
+    "UNK": ("Unknown / Mixed", "#e5e7eb", ""),
 }
 
-ALTERATION = {
-    "None": ("#f8f9fa", ""),
-    "Silicification": ("#dbeafe", "///"),
-    "Sericite": ("#fff3b0", "\\"),
-    "Argillic Clay": ("#ddc1a1", "."),
-    "Advanced Argillic": ("#f4a261", "x"),
-    "Chlorite-Epidote": ("#74c69d", "-"),
-    "Carbonate": ("#caf0f8", "+"),
-    "Potassic": ("#ffb4a2", "."),
-    "Propylitic": ("#b7e4c7", "\\"),
-    "Garnet-Pyroxene": ("#c77dff", "o"),
-    "Epidote-Chlorite-Actinolite": ("#52b788", "-"),
-    "Iron Oxide / Gossan": ("#e76f51", "."),
-    "Serpentinization": ("#80b918", "x"),
+ALTERATION_STYLE = {
+    "none": "#f8f9fa",
+    "silicification": "#dfeaf2",
+    "argillic": "#f5e7ad",
+    "chlorite": "#cddfbd",
+    "epidote": "#a7d8a4",
+    "sericite": "#efe3bf",
+    "carbonate": "#d7e7df",
+    "iron oxide": "#f0a0a0",
+    "hematite": "#e79a8a",
+    "magnetite": "#8d99ae",
+    "potassic": "#f6c5cf",
+    "propylitic": "#b6d9b6",
+    "skarn": "#9bbf8f",
+    "garnet": "#c56b6b",
+    "graphitic": "#555555",
+    "coal": "#1f2937",
+    "uranium redox": "#e0c46c",
+    "clay": "#d8c3a5",
 }
 
-ORE_MODELS = {
-    "Orogenic Gold": {
-        "rocks": ["Schist", "Micaschist", "Gneiss", "Quartzite", "Amphibolite", "Shear Zone", "Quartz Vein Zone"],
-        "alts": ["Sericite", "Carbonate", "Silicification", "Chlorite-Epidote"],
-        "pathfinder": "Au, As, Sb, W, Bi, Te",
-        "sampling": "Channel/chip samples across shear zone, quartz vein margins and altered wall rock.",
-        "drill": "Drill perpendicular to shear/vein fabric; target fold hinge, dilation jog and vein thickening.",
-    },
-    "LS Epithermal Au-Ag": {
-        "rocks": ["Andesite", "Dacite", "Rhyolite", "Tuff", "Volcanic Breccia", "Quartz Vein Zone"],
-        "alts": ["Silicification", "Sericite", "Argillic Clay"],
-        "pathfinder": "Au, Ag, As, Sb, Hg, Tl",
-        "sampling": "Sample banded quartz veins, breccia matrix, vein margins and gossan zones.",
-        "drill": "Target 150–350 m boiling zone below vein/gossan corridor.",
-    },
-    "HS Epithermal Au-Cu": {
-        "rocks": ["Rhyolite", "Dacite", "Tuff", "Volcanic Breccia", "Gossan / Iron Oxide"],
-        "alts": ["Advanced Argillic", "Silicification", "Iron Oxide / Gossan"],
-        "pathfinder": "Au, Cu, As, Sb, Bi, Te, Sn",
-        "sampling": "Sample vuggy silica, jarosite-gossan, breccia matrix and feeder faults.",
-        "drill": "Test lithocap base, feeder fault and breccia pipe at 200–450 m.",
-    },
-    "Porphyry Cu-Au-Mo": {
-        "rocks": ["Granite", "Granodiorite", "Diorite", "Tonalite", "Dacite", "Andesite"],
-        "alts": ["Potassic", "Sericite", "Propylitic", "Silicification"],
-        "pathfinder": "Cu, Mo, Au, Ag, Bi, W, Zn, Pb",
-        "sampling": "Grid sample stockwork zones, phyllic halo and intrusive contacts.",
-        "drill": "Deep test stockwork center with IP/magnetic support, generally 500–900 m.",
-    },
-    "Skarn Cu-Fe-Zn-W": {
-        "rocks": ["Limestone", "Dolomite", "Marble", "Skarn", "Granodiorite", "Diorite"],
-        "alts": ["Garnet-Pyroxene", "Epidote-Chlorite-Actinolite", "Chlorite-Epidote"],
-        "pathfinder": "Cu, Fe, Zn, Pb, W, Mo, Bi, Au",
-        "sampling": "Sample carbonate-intrusive contact, retrograde epidote-chlorite zones and magnetite/sulphide veins.",
-        "drill": "Drill across intrusive-carbonate contact and replacement front.",
-    },
-    "VMS Cu-Zn-Pb-Au-Ag": {
-        "rocks": ["Basalt", "Rhyolite", "Dacite", "Tuff", "Volcanic Breccia", "Massive Sulphide"],
-        "alts": ["Chlorite-Epidote", "Sericite", "Silicification"],
-        "pathfinder": "Cu, Zn, Pb, Ag, Au, Ba, Mn, Fe",
-        "sampling": "Sample massive sulphide lens, footwall stringer zone, exhalite/barite horizons.",
-        "drill": "Target stratigraphic horizon plus EM/IP anomaly and footwall feeder.",
-    },
-    "MVT / SEDEX Pb-Zn-Ag": {
-        "rocks": ["Limestone", "Dolomite", "Shale", "Siltstone"],
-        "alts": ["Carbonate", "Silicification"],
-        "pathfinder": "Pb, Zn, Ag, Ba, Mn",
-        "sampling": "Sample carbonate replacement, galena-sphalerite veins and dolomitized zones.",
-        "drill": "Test carbonate-hosted replacement fronts and basin faults.",
-    },
-    "BIF / Iron Ore": {
-        "rocks": ["BIF / Iron Formation", "Quartzite", "Schist"],
-        "alts": ["Iron Oxide / Gossan", "Silicification"],
-        "pathfinder": "Fe, Mn, Si, P",
-        "sampling": "Channel sample hematite-magnetite bands and enriched iron zones.",
-        "drill": "Drill perpendicular to BIF layering and enrichment zones.",
-    },
-    "Coal": {
-        "rocks": ["Coal", "Mudstone", "Shale", "Sandstone", "Siltstone"],
-        "alts": ["None"],
-        "pathfinder": "C, S, Ash, VM, Moisture",
-        "sampling": "Full-seam channel samples; roof/floor dilution must be separated.",
-        "drill": "Drill seam continuity, thickness, ash, sulphur and roof/floor conditions.",
-    },
-    "Chromite / Ultramafic": {
-        "rocks": ["Serpentinite", "Dunite", "Harzburgite"],
-        "alts": ["Serpentinization"],
-        "pathfinder": "Cr, Ni, Co, Mg, Pt, Pd",
-        "sampling": "Sample chromite bands, nodules and dunite envelope.",
-        "drill": "Short-spaced holes along podiform lens and dunite envelope.",
-    },
-    "Li-REE Pegmatite": {
-        "rocks": ["Pegmatite", "Granite", "Schist", "Gneiss"],
-        "alts": ["Silicification", "Sericite"],
-        "pathfinder": "Li, Cs, Ta, Nb, Sn, Be, REE",
-        "sampling": "Sample pegmatite dyke, contact zones, mica-rich and heavy mineral zones.",
-        "drill": "Drill dyke continuity, zonation and down-dip extensions.",
-    },
-}
+ORE_SYSTEMS = [
+    "Unknown / general exploration",
+    "Orogenic gold",
+    "Epithermal Au-Ag",
+    "Porphyry Cu-Au",
+    "VMS base metals",
+    "Skarn Fe-Cu-Au",
+    "Iron ore / BIF / magnetite-hematite",
+    "Uranium / redox system",
+    "Coal / carbonaceous basin",
+    "MVT / SEDEX Pb-Zn-Ag",
+    "Lithium pegmatite / REE",
+    "Industrial minerals"
+]
 
-STRUCTURES = ["Bedding", "Fracture", "Fault", "Shear", "Quartz Vein", "Stockwork", "Breccia"]
+def safe_json_loads(text):
+    text = text.strip()
+    text = re.sub(r"^```json", "", text)
+    text = re.sub(r"^```", "", text)
+    text = re.sub(r"```$", "", text)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        text = match.group(0)
+    return json.loads(text)
 
-# ============================================================
-# HELPERS
-# ============================================================
+def image_to_base64(image_bytes):
+    return base64.b64encode(image_bytes).decode("utf-8")
 
-def stable_int(text):
-    return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:8], 16)
+def normalize_code(code):
+    if not code:
+        return "UNK"
+    code = str(code).upper().strip()
+    return code if code in LITHOLOGY_STYLE else "UNK"
 
-def choose_lithology(filename):
-    n = filename.lower()
-    mapping = {
-        "coal": "Coal", "komur": "Coal", "kömür": "Coal",
-        "bif": "BIF / Iron Formation", "iron": "BIF / Iron Formation", "demir": "BIF / Iron Formation",
-        "skarn": "Skarn", "marble": "Marble", "mermer": "Marble", "limestone": "Limestone", "dolomite": "Dolomite",
-        "vms": "Massive Sulphide", "sulfide": "Massive Sulphide", "sulphide": "Massive Sulphide",
-        "chromite": "Serpentinite", "krom": "Serpentinite", "serp": "Serpentinite",
-        "peg": "Pegmatite", "lithium": "Pegmatite", "ree": "Pegmatite",
-        "gossan": "Gossan / Iron Oxide",
-        "quartz": "Quartz Vein Zone", "vein": "Quartz Vein Zone",
-        "shear": "Shear Zone",
-        "breccia": "Volcanic Breccia",
-        "gran": "Granodiorite",
-        "dior": "Diorite",
-        "andesite": "Andesite",
-        "dacite": "Dacite",
-        "basalt": "Basalt",
-        "schist": "Schist",
-        "gneiss": "Gneiss",
-    }
-    for key, lith in mapping.items():
-        if key in n:
-            return lith
-    pool = ["Granodiorite", "Andesite", "Dacite", "Volcanic Breccia", "Schist", "Quartz Vein Zone", "Gossan / Iron Oxide"]
-    return pool[stable_int(filename) % len(pool)]
+def alteration_color(alterations):
+    if not alterations:
+        return ALTERATION_STYLE["none"]
+    joined = " ".join([str(a).lower() for a in alterations])
+    for key, color in ALTERATION_STYLE.items():
+        if key in joined:
+            return color
+    return "#f8f9fa"
 
-def choose_alteration(lith, seed):
-    def pick(items):
-        return items[seed % len(items)]
+def analyze_core_image_with_ai(image_bytes, from_m, to_m, ore_context):
+    image_b64 = image_to_base64(image_bytes)
 
-    if lith in ["Gossan / Iron Oxide", "BIF / Iron Formation"]:
-        return "Iron Oxide / Gossan"
-    if lith in ["Skarn", "Marble", "Limestone", "Dolomite"]:
-        return pick(["Garnet-Pyroxene", "Epidote-Chlorite-Actinolite", "Carbonate"])
-    if lith in ["Serpentinite", "Dunite", "Harzburgite"]:
-        return "Serpentinization"
-    if lith in ["Granite", "Granodiorite", "Diorite", "Tonalite", "Gabbro"]:
-        return pick(["Silicification", "Sericite", "Potassic", "Propylitic"])
-    if lith in ["Rhyolite", "Dacite", "Andesite", "Tuff", "Volcanic Breccia"]:
-        return pick(["Silicification", "Argillic Clay", "Sericite", "Advanced Argillic"])
-    if lith in ["Schist", "Micaschist", "Gneiss", "Quartzite", "Shear Zone"]:
-        return pick(["Sericite", "Carbonate", "Silicification", "Chlorite-Epidote"])
-    if lith == "Coal":
-        return "None"
-    return "None"
+    prompt = f"""
+You are a senior exploration geologist, core logging specialist and economic geology consultant.
 
-def infer_model(lith, alt):
-    scores = {}
-    for model, data in ORE_MODELS.items():
-        score = 0
-        if lith in data["rocks"]:
-            score += 55
-        if alt in data["alts"]:
-            score += 35
-        if lith == "Quartz Vein Zone" and model in ["Orogenic Gold", "LS Epithermal Au-Ag"]:
-            score += 15
-        if lith == "Coal" and model == "Coal":
-            score += 100
-        scores[model] = min(score, 100)
-    best = max(scores, key=scores.get)
-    return best, scores
+Analyze the uploaded drill core / chip tray image visually.
 
-def analyze_segment(filename, depth_from, depth_to):
-    seed = stable_int(filename)
-    lith = choose_lithology(filename)
-    code, tr, color, hatch, group = LITHOLOGY[lith]
-    alt = choose_alteration(lith, seed)
-    alt_color, alt_hatch = ALTERATION[alt]
-    model, scores = infer_model(lith, alt)
+Depth interval:
+FROM = {from_m} m
+TO = {to_m} m
 
-    py = round((seed % 35) / 10, 1)
-    cpy = round((seed % 18) / 10, 1) if model in ["Porphyry Cu-Au-Mo", "Skarn Cu-Fe-Zn-W", "VMS Cu-Zn-Pb-Au-Ag"] else round((seed % 8) / 10, 1)
-    gn = round((seed % 12) / 10, 1) if model in ["MVT / SEDEX Pb-Zn-Ag", "VMS Cu-Zn-Pb-Au-Ag"] else 0.0
-    sp = round((seed % 14) / 10, 1) if model in ["MVT / SEDEX Pb-Zn-Ag", "Skarn Cu-Fe-Zn-W", "VMS Cu-Zn-Pb-Au-Ag"] else 0.0
+Exploration context:
+{ore_context}
 
-    if lith == "Coal":
-        py, cpy, gn, sp = 0.1, 0.0, 0.0, 0.0
+Return ONLY valid JSON. Do not use markdown.
 
-    rqd = int(35 + (seed % 60))
-    tcr = int(75 + (seed % 25))
-    structure = STRUCTURES[seed % len(STRUCTURES)]
-    ore = ORE_MODELS[model]
+Critical rules:
+1. Do NOT invent assay grades.
+2. Do NOT claim certainty for minerals that cannot be visually confirmed.
+3. RQD from a photo is only a visual estimate unless exact piece lengths and scale are visible.
+4. If the image has broken core/chips, estimate fracture intensity and give low/medium confidence.
+5. Identify possible lithology, texture, colour, alteration, oxidation, veining, brecciation, shear, fault gouge, mylonite, clay, chlorite, epidote, garnet, pyrite, chalcopyrite, galena, sphalerite, magnetite, hematite, graphite/carbonaceous material, coal, uranium redox indicators if visually relevant.
+6. Give guidance for possible deposit systems: gold, copper, iron, uranium, coal, base metals, skarn, VMS, porphyry, epithermal, orogenic gold.
+7. If uncertain, say uncertain.
 
-    return {
-        "From": depth_from,
-        "To": depth_to,
-        "Mid": (depth_from + depth_to) / 2,
-        "Thickness": depth_to - depth_from,
-        "Lithology": lith,
-        "Code": code,
-        "Lithology TR": tr,
-        "Group": group,
-        "Lith Color": color,
-        "Lith Hatch": hatch,
-        "Alteration": alt,
-        "Alt Color": alt_color,
-        "Alt Hatch": alt_hatch,
-        "Py": py,
-        "Cpy": cpy,
-        "Gn": gn,
-        "Sp": sp,
-        "RQD": rqd,
-        "TCR": tcr,
-        "Structure": structure,
-        "Ore Model": model,
-        "Pathfinder": ore["pathfinder"],
-        "Sampling": ore["sampling"],
-        "Drill": ore["drill"],
-    }
+Use this exact JSON schema:
+{{
+  "from_m": {from_m},
+  "to_m": {to_m},
+  "primary_lithology": "string",
+  "lithology_code": "one of GDR, GRN, DIO, AND, BAS, DAC, RHY, TFF, VBX, QZV, LST, DOL, SKN, BIF, SST, SHL, CLN, MYL, FLT, UNK",
+  "secondary_lithology": "string or none",
+  "texture": "string",
+  "colour": "string",
+  "grain_size": "string",
+  "alteration": ["string"],
+  "alteration_intensity": "none/weak/moderate/strong/intense/uncertain",
+  "visible_structures": ["string"],
+  "fracture_intensity": "low/moderate/high/very high",
+  "possible_fault_or_shear": "yes/no/uncertain",
+  "visual_rqd_estimate_percent": number,
+  "rqd_confidence": "low/medium/high",
+  "tcr_visual_estimate_percent": number,
+  "sulfide_visual_estimate_percent": number,
+  "sulfide_confidence": "low/medium/high",
+  "visible_sulfides": ["string"],
+  "visible_oxides": ["string"],
+  "indicator_minerals": ["string"],
+  "ore_system_indicators": ["string"],
+  "possible_deposit_models": ["string"],
+  "economic_potential": "low/moderate/high/unknown",
+  "recommended_follow_up": ["string"],
+  "geological_note": "string",
+  "confidence": "low/medium/high"
+}}
+"""
 
-def summarize(df, col):
-    out = df.groupby(col)["Thickness"].sum().reset_index()
-    out["Percent"] = (out["Thickness"] / out["Thickness"].sum() * 100).round(1)
-    return out.sort_values("Thickness", ascending=False)
-
-def add_panel_title(ax, title):
-    ax.set_title(title, fontsize=10, fontweight="bold", color="#0f2742", pad=10)
-
-def draw_structural_symbol(ax, x0, x1, y, kind):
-    if kind == "Fault":
-        ax.plot([x0, x1], [y + 0.45, y - 0.45], color="black", lw=1.1)
-        ax.plot([0.48, 0.56], [y + 0.1, y - 0.1], color="red", lw=1.1)
-    elif kind == "Shear":
-        ax.plot([x0, x1], [y + 0.5, y - 0.5], color="black", lw=1.0)
-        ax.plot([x0 + 0.1, x1 - 0.1], [y + 0.15, y - 0.15], color="black", lw=0.7)
-    elif kind == "Quartz Vein":
-        ax.plot([x0, x1], [y + 0.35, y - 0.35], color="red", lw=1.1)
-    elif kind == "Stockwork":
-        ax.plot([x0, x1], [y + 0.35, y - 0.35], color="red", lw=0.9)
-        ax.plot([x0, x1], [y - 0.25, y + 0.25], color="red", lw=0.7)
-    elif kind == "Breccia":
-        ax.scatter([0.35, 0.5, 0.65], [y + 0.2, y - 0.15, y + 0.05], s=8, color="black")
-    else:
-        ax.plot([x0, x1], [y + 0.25, y - 0.25], color="black", lw=0.8)
-
-# ============================================================
-# UI
-# ============================================================
-
-left, right = st.columns([1.05, 3.6])
-
-with left:
-    st.header("⚙️ Data")
-    hole_id = st.text_input("Hole ID", "DDH-2026-004")
-    project = st.text_input("Project", "SAHA-01")
-    location = st.text_input("Location", "Central Zone")
-    az_dip = st.text_input("Azimuth / Dip", "045° / -60°")
-
-    uploaded_files = st.file_uploader(
-        "Upload core/outcrop segment photos",
-        type=["jpg", "jpeg", "png"],
-        accept_multiple_files=True
+    response = client.responses.create(
+        model="gpt-4o",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt},
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:image/jpeg;base64,{image_b64}",
+                    },
+                ],
+            }
+        ],
     )
 
-    intervals = []
-    if uploaded_files:
-        st.success(f"{len(uploaded_files)} images uploaded.")
-        for i, f in enumerate(uploaded_files):
-            c1, c2 = st.columns(2)
-            d_from = c1.number_input(f"From {i+1}", value=float(i * 10), step=1.0, key=f"from_{i}")
-            d_to = c2.number_input(f"To {i+1}", value=float((i + 1) * 10), step=1.0, key=f"to_{i}")
-            st.image(f, caption=f.name, width=130)
-            intervals.append((f.name, d_from, d_to))
+    return safe_json_loads(response.output_text)
 
-    run = st.button("🚀 Generate Master Dashboard", use_container_width=True)
+def build_rows_from_ai_results(ai_results):
+    rows = []
+    for r in ai_results:
+        code = normalize_code(r.get("lithology_code", "UNK"))
+        lith_name, color, hatch = LITHOLOGY_STYLE[code]
+        alt_list = r.get("alteration", [])
+        if not isinstance(alt_list, list):
+            alt_list = [str(alt_list)]
 
-if run and uploaded_files:
-    rows = [analyze_segment(name, d_from, d_to) for name, d_from, d_to in intervals]
+        visible_sulfides = r.get("visible_sulfides", [])
+        visible_oxides = r.get("visible_oxides", [])
+        indicator_minerals = r.get("indicator_minerals", [])
+        structures = r.get("visible_structures", [])
+        deposit_models = r.get("possible_deposit_models", [])
+        follow_up = r.get("recommended_follow_up", [])
+
+        rows.append({
+            "From": float(r.get("from_m", 0)),
+            "To": float(r.get("to_m", 0)),
+            "LithCode": code,
+            "Lithology": r.get("primary_lithology", lith_name),
+            "SecondaryLithology": r.get("secondary_lithology", "none"),
+            "Texture": r.get("texture", "uncertain"),
+            "Colour": r.get("colour", "uncertain"),
+            "GrainSize": r.get("grain_size", "uncertain"),
+            "Alteration": ", ".join(alt_list),
+            "AlterationIntensity": r.get("alteration_intensity", "uncertain"),
+            "Structures": ", ".join(structures),
+            "FaultShear": r.get("possible_fault_or_shear", "uncertain"),
+            "FractureIntensity": r.get("fracture_intensity", "uncertain"),
+            "RQD_%": float(r.get("visual_rqd_estimate_percent", 0)),
+            "RQD_Confidence": r.get("rqd_confidence", "low"),
+            "TCR_%": float(r.get("tcr_visual_estimate_percent", 0)),
+            "Sulfide_%": float(r.get("sulfide_visual_estimate_percent", 0)),
+            "SulfideConfidence": r.get("sulfide_confidence", "low"),
+            "VisibleSulfides": ", ".join(visible_sulfides),
+            "VisibleOxides": ", ".join(visible_oxides),
+            "IndicatorMinerals": ", ".join(indicator_minerals),
+            "OreIndicators": ", ".join(r.get("ore_system_indicators", [])),
+            "DepositModels": ", ".join(deposit_models),
+            "EconomicPotential": r.get("economic_potential", "unknown"),
+            "FollowUp": ", ".join(follow_up),
+            "GeologicalNote": r.get("geological_note", "No note."),
+            "Confidence": r.get("confidence", "low"),
+            "Color": color,
+            "Hatch": hatch,
+            "AltColor": alteration_color(alt_list),
+        })
+
     df = pd.DataFrame(rows)
+    df["Thickness"] = df["To"] - df["From"]
+    df["Mid"] = (df["From"] + df["To"]) / 2
+    return df.sort_values("From").reset_index(drop=True)
 
+def summarize_lithology(df):
+    s = df.groupby(["LithCode", "Lithology", "Color", "Hatch"], as_index=False)["Thickness"].sum()
+    total = s["Thickness"].sum()
+    s["Percent"] = np.where(total > 0, s["Thickness"] / total * 100, 0)
+    return s.sort_values("Thickness", ascending=False)
+
+def draw_structure_symbol(ax, x, y, name, color="#111111"):
+    name = str(name).lower()
+    if "fault" in name:
+        ax.plot([x - 0.08, x + 0.08], [y + 0.08, y - 0.08], color=color, lw=1.0)
+        ax.plot([x - 0.03, x + 0.02], [y + 0.01, y + 0.05], color=color, lw=1.0)
+    elif "shear" in name or "mylonite" in name:
+        ax.plot([x - 0.09, x + 0.09], [y + 0.06, y - 0.06], color=color, lw=1.0)
+        ax.plot([x - 0.07, x + 0.07], [y + 0.00, y - 0.12], color=color, lw=1.0)
+    elif "vein" in name or "quartz" in name:
+        ax.plot([x - 0.09, x + 0.09], [y + 0.05, y - 0.05], color="#c62828", lw=1.1)
+        ax.plot([x - 0.08, x + 0.08], [y + 0.09, y - 0.01], color="#c62828", lw=0.8)
+    elif "breccia" in name:
+        tri = patches.RegularPolygon((x, y), 3, radius=0.055, orientation=0.3, facecolor="none", edgecolor=color, lw=1.0)
+        ax.add_patch(tri)
+    else:
+        ax.plot([x - 0.08, x + 0.06], [y - 0.08, y + 0.08], color=color, lw=0.9)
+
+def make_master_log(df, project, location, hole_id, azdip, date_txt):
     depth_top = float(df["From"].min())
     depth_bottom = float(df["To"].max())
     total_depth = depth_bottom - depth_top
 
+    fig = plt.figure(figsize=(18, 11), dpi=170)
+
+    gs = GridSpec(
+        1, 10,
+        figure=fig,
+        width_ratios=[0.55, 1.35, 0.58, 1.75, 1.55, 1.25, 1.3, 1.15, 2.6, 2.4],
+        wspace=0.09,
+    )
+
+    ax_depth = fig.add_subplot(gs[0, 0])
+    ax_lith = fig.add_subplot(gs[0, 1], sharey=ax_depth)
+    ax_code = fig.add_subplot(gs[0, 2], sharey=ax_depth)
+    ax_desc = fig.add_subplot(gs[0, 3], sharey=ax_depth)
+    ax_alt = fig.add_subplot(gs[0, 4], sharey=ax_depth)
+    ax_sulf = fig.add_subplot(gs[0, 5], sharey=ax_depth)
+    ax_rqd = fig.add_subplot(gs[0, 6], sharey=ax_depth)
+    ax_struct = fig.add_subplot(gs[0, 7], sharey=ax_depth)
+    ax_marks = fig.add_subplot(gs[0, 8], sharey=ax_depth)
+    ax_side = fig.add_subplot(gs[0, 9])
+
+    axes_depth = [ax_depth, ax_lith, ax_code, ax_desc, ax_alt, ax_sulf, ax_rqd, ax_struct, ax_marks]
+
+    for ax in axes_depth:
+        ax.set_ylim(depth_bottom, depth_top)
+        ax.set_facecolor("white")
+        ax.grid(axis="y", color="#d0d0d0", lw=0.45, ls="--", alpha=0.8)
+        for spine in ax.spines.values():
+            spine.set_color("#9ca3af")
+            spine.set_linewidth(0.7)
+
+    fig.suptitle(
+        f"COMPREHENSIVE GEOLOGICAL MASTER LOG | HOLE ID: {hole_id}",
+        y=0.985,
+        fontsize=15,
+        fontweight="bold",
+        color="#0b1d3a",
+    )
+
+    fig.text(0.07, 0.953, f"PROJECT: {project}", fontsize=8, fontweight="bold")
+    fig.text(0.20, 0.953, f"LOCATION: {location}", fontsize=8)
+    fig.text(0.36, 0.953, f"AZIMUTH / DIP: {azdip}", fontsize=8, fontweight="bold")
+    fig.text(0.52, 0.953, f"TOTAL DEPTH: {total_depth:.1f} m", fontsize=8, fontweight="bold")
+    fig.text(0.66, 0.953, f"DATE: {date_txt}", fontsize=8, fontweight="bold")
+
+    major = np.arange(np.floor(depth_top / 5) * 5, depth_bottom + 5, 5)
+    minor = np.arange(np.floor(depth_top), depth_bottom + 1, 1)
+
+    ax_depth.set_xlim(0, 1)
+    ax_depth.set_title("DEPTH\n(m)", fontsize=8, fontweight="bold", pad=10)
+    ax_depth.set_yticks(major)
+    ax_depth.set_yticks(minor, minor=True)
+    ax_depth.set_xticks([])
+    ax_depth.tick_params(axis="y", which="major", length=7, width=1, labelsize=8)
+    ax_depth.tick_params(axis="y", which="minor", length=3, width=0.6)
+
+    titles = [
+        (ax_lith, "LITHOLOGY\n(Visual Log)"),
+        (ax_code, "ROCK\nCODE"),
+        (ax_desc, "LITHOLOGY\nDESCRIPTION"),
+        (ax_alt, "ALTERATION\n(Dominant)"),
+        (ax_sulf, "SULFIDE\n(%)"),
+        (ax_rqd, "RQD\n(%)"),
+        (ax_struct, "STRUCTURAL\n(Log)"),
+        (ax_marks, "AI GEOLOGICAL INTERPRETATION"),
+    ]
+
+    for ax, title in titles:
+        ax.set_title(title, fontsize=8, fontweight="bold", pad=10)
+        ax.set_yticklabels([])
+
+    for ax in [ax_lith, ax_code, ax_desc, ax_alt, ax_struct, ax_marks]:
+        ax.set_xlim(0, 1)
+        ax.set_xticks([])
+
+    ax_sulf.set_xlim(0, max(5, float(df["Sulfide_%"].max()) * 1.35))
+    ax_sulf.grid(axis="x", color="#dddddd", ls="--", lw=0.5)
+
+    ax_rqd.set_xlim(0, 100)
+    ax_rqd.set_xticks([0, 50, 100])
+    ax_rqd.grid(axis="x", color="#dddddd", ls="--", lw=0.5)
+
+    for _, r in df.iterrows():
+        y0 = float(r["From"])
+        y1 = float(r["To"])
+        thick = float(r["Thickness"])
+        mid = float(r["Mid"])
+
+        ax_lith.add_patch(
+            patches.Rectangle(
+                (0, y0), 1, thick,
+                facecolor=r["Color"],
+                edgecolor="#333",
+                lw=0.65,
+                hatch=r["Hatch"],
+                alpha=0.95,
+            )
+        )
+        ax_lith.text(
+            0.5, mid,
+            f"[{r['LithCode']}]\n{r['Lithology']}",
+            ha="center",
+            va="center",
+            fontsize=6.5,
+            fontweight="bold",
+            bbox=dict(facecolor="white", edgecolor="#777", alpha=0.9, boxstyle="round,pad=0.25"),
+        )
+
+        ax_code.text(0.5, mid, r["LithCode"], ha="center", va="center", fontsize=8, fontweight="bold")
+
+        desc = (
+            f"{r['Lithology']}\n"
+            f"Colour: {r['Colour']}\n"
+            f"Texture: {r['Texture']}\n"
+            f"Grain size: {r['GrainSize']}\n"
+            f"Secondary: {r['SecondaryLithology']}"
+        )
+        ax_desc.text(0.04, mid, textwrap.fill(desc, 26), ha="left", va="center", fontsize=6.5)
+
+        ax_alt.add_patch(
+            patches.Rectangle(
+                (0, y0), 1, thick,
+                facecolor=r["AltColor"],
+                edgecolor="#333",
+                lw=0.55,
+                alpha=0.82,
+            )
+        )
+        ax_alt.text(
+            0.5, mid,
+            textwrap.fill(f"{r['Alteration']}\n{r['AlterationIntensity']}", 16),
+            ha="center",
+            va="center",
+            fontsize=6.3,
+            fontweight="bold",
+        )
+
+        ax_sulf.barh(
+            mid,
+            float(r["Sulfide_%"]),
+            height=thick * 0.75,
+            left=0,
+            color="#e8773d",
+            edgecolor="#b45309",
+            alpha=0.9,
+        )
+
+        structures = str(r["Structures"]).split(",")
+        if len(structures) == 0 or structures == [""]:
+            structures = ["fracture"]
+
+        rng = np.random.default_rng(int((mid + 1) * 1000) % 999999)
+        n_symbols = max(2, min(8, int(thick / 2) + 1))
+        for i in range(n_symbols):
+            yy = float(rng.uniform(y0 + thick * 0.15, y1 - thick * 0.15)) if thick > 1 else mid
+            xx = float(rng.uniform(0.2, 0.8))
+            symbol_name = structures[i % len(structures)]
+            draw_structure_symbol(ax_struct, xx, yy, symbol_name)
+
+        note = (
+            f"{r['From']:.1f}–{r['To']:.1f} m | {r['Lithology']} ({r['LithCode']})\n"
+            f"Fracturing: {r['FractureIntensity']} | RQD visual est.: {r['RQD_%']:.0f}% ({r['RQD_Confidence']} confidence)\n"
+            f"Sulfide visual est.: {r['Sulfide_%']:.1f}% ({r['SulfideConfidence']} confidence)\n"
+            f"Visible sulfides: {r['VisibleSulfides']}\n"
+            f"Oxides / indicators: {r['VisibleOxides']} | {r['IndicatorMinerals']}\n"
+            f"Possible models: {r['DepositModels']}\n"
+            f"Potential: {r['EconomicPotential']}\n"
+            f"Follow-up: {r['FollowUp']}\n"
+            f"Note: {r['GeologicalNote']}"
+        )
+
+        border = "#f59e0b" if str(r["EconomicPotential"]).lower() in ["moderate", "high"] else "#cbd5e1"
+        bg = "#fffbeb" if str(r["EconomicPotential"]).lower() in ["moderate", "high"] else "#f8fafc"
+
+        ax_marks.text(
+            0.01, mid,
+            textwrap.fill(note, 75),
+            ha="left",
+            va="center",
+            fontsize=5.9,
+            linespacing=1.25,
+            bbox=dict(facecolor=bg, edgecolor=border, boxstyle="square,pad=0.45", lw=0.9),
+        )
+
+    ax_rqd.plot(df["RQD_%"], df["Mid"], color="#0b2545", lw=1.4, marker="o", markersize=3)
+
+    ax_side.axis("off")
+    ax_side.set_title("SUMMARY & LEGEND", fontsize=9, fontweight="bold", pad=10)
+
+    lith_sum = summarize_lithology(df)
+
+    inset = ax_side.inset_axes([0.05, 0.72, 0.48, 0.23])
+    wedges, _ = inset.pie(
+        lith_sum["Thickness"],
+        colors=lith_sum["Color"],
+        startangle=90,
+        wedgeprops=dict(width=0.38, edgecolor="white"),
+    )
+    for w, h in zip(wedges, lith_sum["Hatch"]):
+        w.set_hatch(h)
+    inset.text(0, 0, f"{total_depth:.1f} m\nTotal", ha="center", va="center", fontsize=7, fontweight="bold")
+    inset.set_aspect("equal")
+
+    y = 0.92
+    ax_side.text(0.56, y, "TOTAL LITHOLOGY", fontsize=7, fontweight="bold", transform=ax_side.transAxes)
+    y -= 0.035
+
+    for _, rr in lith_sum.iterrows():
+        ax_side.add_patch(
+            patches.Rectangle(
+                (0.56, y - 0.012), 0.035, 0.018,
+                facecolor=rr["Color"],
+                hatch=rr["Hatch"],
+                edgecolor="#333",
+                transform=ax_side.transAxes,
+            )
+        )
+        ax_side.text(0.60, y, f"{rr['Lithology']} ({rr['LithCode']})", fontsize=6, transform=ax_side.transAxes, va="center")
+        ax_side.text(0.98, y, f"{rr['Percent']:.1f}%", fontsize=6, transform=ax_side.transAxes, ha="right", va="center")
+        y -= 0.031
+
+    y = 0.61
+    ax_side.text(0.05, y, "USED LITHOLOGY CODES", fontsize=7, fontweight="bold", transform=ax_side.transAxes)
+    y -= 0.034
+
+    for code in df["LithCode"].unique():
+        name, color, hatch = LITHOLOGY_STYLE.get(code, LITHOLOGY_STYLE["UNK"])
+        ax_side.add_patch(
+            patches.Rectangle(
+                (0.06, y - 0.012), 0.035, 0.018,
+                facecolor=color,
+                hatch=hatch,
+                edgecolor="#333",
+                transform=ax_side.transAxes,
+            )
+        )
+        ax_side.text(0.105, y, f"{code}  {name}", fontsize=6, transform=ax_side.transAxes, va="center")
+        y -= 0.028
+
+    y -= 0.02
+    ax_side.text(0.05, y, "IMPORTANT WARNING", fontsize=7, fontweight="bold", transform=ax_side.transAxes)
+    y -= 0.035
+    warning = (
+        "AI interpretation is visual and preliminary. "
+        "Final logging requires geologist review, scale-controlled RQD, assays, petrography, QA/QC and field context."
+    )
+    ax_side.text(0.05, y, textwrap.fill(warning, 42), fontsize=6.2, transform=ax_side.transAxes, va="top")
+
+    fig.text(
+        0.06,
+        0.025,
+        "Note: RQD shown here is a visual estimate from image analysis. True RQD must be calculated from measured core pieces >10 cm over the run length.",
+        fontsize=7,
+        style="italic",
+        color="#555",
+    )
+
+    return fig
+
+# ===================== UI =====================
+
+st.markdown(
+    """
+    <div style="background:linear-gradient(135deg,#0b1d3a,#1d4ed8);padding:22px;border-radius:16px;color:white;">
+    <h1 style="margin:0;">⛏️ CoreLog-AI Vision Logger</h1>
+    <p style="margin:6px 0 0 0;">AI-assisted geological core/chip image interpretation + master log figure.</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+left, right = st.columns([1, 2.8])
+
+with left:
+    st.subheader("Project")
+    project = st.text_input("Project", "SAHA-01")
+    location = st.text_input("Location", "Central Zone")
+    hole_id = st.text_input("Hole ID", "DDH-2026-004")
+    azdip = st.text_input("Azimuth / Dip", "045° / -60°")
+    date_txt = st.text_input("Date", "16 May 2025")
+
+    st.subheader("Geological context")
+    ore_context = st.selectbox("Exploration / deposit context", ORE_SYSTEMS)
+
+    uploaded_files = st.file_uploader(
+        "Upload drill core / chip tray images",
+        type=["jpg", "jpeg", "png"],
+        accept_multiple_files=True,
+    )
+
+intervals = []
+
+if uploaded_files:
+    with left:
+        st.subheader("Depth intervals")
+        for i, f in enumerate(uploaded_files):
+            st.image(f, caption=f.name, width=180)
+            c1, c2 = st.columns(2)
+            d_from = c1.number_input(f"From #{i+1}", value=float(i * 10), step=1.0, key=f"from_{i}")
+            d_to = c2.number_input(f"To #{i+1}", value=float((i + 1) * 10), step=1.0, key=f"to_{i}")
+
+            intervals.append({
+                "file_name": f.name,
+                "file_bytes": f.getvalue(),
+                "from": d_from,
+                "to": d_to,
+            })
+
     with right:
-        st.subheader(f"📊 Output: {hole_id}")
+        st.subheader("Run AI visual geological logging")
 
-        fig_height = min(max(12, total_depth * 0.24), 34)
-        fig = plt.figure(figsize=(24, fig_height), dpi=220)
+        if st.button("🚀 Analyze images with AI and build log table", type="primary", use_container_width=True):
+            ai_results = []
 
-        gs = fig.add_gridspec(
-            2, 10,
-            height_ratios=[1.9, 8.5],
-            width_ratios=[0.45, 1.0, 0.45, 1.2, 1.1, 0.85, 0.75, 0.75, 1.25, 2.7],
-            wspace=0.12,
-            hspace=0.12
-        )
+            progress = st.progress(0)
+            for idx, item in enumerate(intervals):
+                with st.spinner(f"Analyzing {item['file_name']}..."):
+                    result = analyze_core_image_with_ai(
+                        item["file_bytes"],
+                        item["from"],
+                        item["to"],
+                        ore_context,
+                    )
+                    ai_results.append(result)
+                progress.progress((idx + 1) / len(intervals))
 
-        fig.suptitle(
-            f"COMPREHENSIVE GEOLOGICAL MASTER DASHBOARD | HOLE ID: {hole_id}",
-            fontsize=20,
-            fontweight="bold",
-            color="#0f2742",
-            y=0.99
-        )
+            df = build_rows_from_ai_results(ai_results)
+            st.session_state["corelog_df"] = df
 
-        # Header panel
-        ax_meta = fig.add_subplot(gs[0, 0:3])
-        ax_meta.axis("off")
-        ax_meta.text(
-            0, 0.95,
-            f"PROJECT: {project}\nLOCATION: {location}\nAZIMUTH / DIP: {az_dip}\nTOTAL DEPTH: {total_depth:.1f} m",
-            va="top",
-            fontsize=11,
-            fontweight="bold",
-            color="#0f2742"
-        )
+        if "corelog_df" in st.session_state:
+            st.subheader("Editable AI logging table")
+            df = st.session_state["corelog_df"]
 
-        # Lithology donut
-        ax_lith_donut = fig.add_subplot(gs[0, 3:5])
-        lith_sum = summarize(df, "Lithology TR")
-        lith_colors = []
-        lith_hatches = []
-        for lith_tr in lith_sum["Lithology TR"]:
-            found = False
-            for _, vals in LITHOLOGY.items():
-                if vals[1] == lith_tr:
-                    lith_colors.append(vals[2])
-                    lith_hatches.append(vals[3])
-                    found = True
-            if not found:
-                lith_colors.append("#e5e5e5")
-                lith_hatches.append("")
+            editable_cols = [
+                "From", "To", "LithCode", "Lithology", "SecondaryLithology",
+                "Texture", "Colour", "Alteration", "AlterationIntensity",
+                "Structures", "FaultShear", "FractureIntensity",
+                "RQD_%", "RQD_Confidence", "TCR_%",
+                "Sulfide_%", "VisibleSulfides", "VisibleOxides",
+                "IndicatorMinerals", "DepositModels", "EconomicPotential",
+                "FollowUp", "GeologicalNote", "Confidence"
+            ]
 
-        wedges, _ = ax_lith_donut.pie(
-            lith_sum["Thickness"],
-            colors=lith_colors,
-            startangle=90,
-            wedgeprops={"width": 0.42, "edgecolor": "#0f2742", "linewidth": 0.8}
-        )
-        for w, h in zip(wedges, lith_hatches):
-            w.set_hatch(h)
-
-        ax_lith_donut.text(0, 0, f"{total_depth:.0f} m\nTotal", ha="center", va="center", fontsize=9, fontweight="bold")
-        add_panel_title(ax_lith_donut, "LITHOLOGY SUMMARY")
-
-        # Ore model donut
-        ax_ore_donut = fig.add_subplot(gs[0, 5:7])
-        ore_sum = summarize(df, "Ore Model")
-        ore_colors = plt.cm.Set3(np.linspace(0, 1, len(ore_sum)))
-        ax_ore_donut.pie(
-            ore_sum["Thickness"],
-            colors=ore_colors,
-            startangle=90,
-            wedgeprops={"width": 0.42, "edgecolor": "white"}
-        )
-        ax_ore_donut.text(0, 0, "Ore\nModels", ha="center", va="center", fontsize=9, fontweight="bold")
-        add_panel_title(ax_ore_donut, "ORE SYSTEMS")
-
-        # Legend panel
-        ax_legend = fig.add_subplot(gs[0, 7:10])
-        ax_legend.axis("off")
-        ax_legend.text(0.0, 0.95, "ACTIVE LEGEND", fontsize=11, fontweight="bold", color="#0f2742", va="top")
-
-        used_liths = list(df["Lithology"].unique())
-        y0 = 0.72
-        for i, lith in enumerate(used_liths[:6]):
-            code, tr, color, hatch, group = LITHOLOGY[lith]
-            ax_legend.add_patch(patches.Rectangle((0.0, y0 - i * 0.12), 0.05, 0.06, facecolor=color, edgecolor="black", hatch=hatch))
-            ax_legend.text(0.07, y0 + 0.01 - i * 0.12, f"{code} {tr}", fontsize=8, va="center")
-
-        ax_legend.text(
-            0.45, 0.72,
-            "Coverage:\nAu, Cu, Pb-Zn-Ag, Fe, coal,\nchromite, skarn, VMS,\nporphyry, epithermal,\npegmatite systems.",
-            fontsize=8.2,
-            va="top",
-            color="#334155"
-        )
-
-        # Main log axes
-        ax_depth = fig.add_subplot(gs[1, 0])
-        ax_lith = fig.add_subplot(gs[1, 1], sharey=ax_depth)
-        ax_code = fig.add_subplot(gs[1, 2], sharey=ax_depth)
-        ax_desc = fig.add_subplot(gs[1, 3], sharey=ax_depth)
-        ax_alt = fig.add_subplot(gs[1, 4], sharey=ax_depth)
-        ax_sulf = fig.add_subplot(gs[1, 5], sharey=ax_depth)
-        ax_rqd = fig.add_subplot(gs[1, 6], sharey=ax_depth)
-        ax_struct = fig.add_subplot(gs[1, 7], sharey=ax_depth)
-        ax_model = fig.add_subplot(gs[1, 8], sharey=ax_depth)
-        ax_note = fig.add_subplot(gs[1, 9], sharey=ax_depth)
-
-        axes = [ax_depth, ax_lith, ax_code, ax_desc, ax_alt, ax_sulf, ax_rqd, ax_struct, ax_model, ax_note]
-        for ax in axes:
-            ax.set_ylim(depth_bottom, depth_top)
-            ax.set_yticks(np.arange(depth_top, depth_bottom + 5, 5))
-            ax.grid(axis="y", linestyle=":", alpha=0.35)
-
-        ax_depth.set_xlim(0, 1)
-        ax_depth.set_xticks([])
-        add_panel_title(ax_depth, "DEPTH\nm")
-        ax_depth.set_ylabel("Depth / Derinlik (m)", fontsize=10, fontweight="bold")
-        for y in np.arange(depth_top, depth_bottom + 1, 1):
-            ax_depth.plot([0.35, 0.65], [y, y], color="black", lw=0.45)
-
-        for ax, title in [
-            (ax_lith, "LITHOLOGY\nVisual Log"),
-            (ax_code, "ROCK\nCode"),
-            (ax_desc, "LITHOLOGY\nDescription"),
-            (ax_alt, "ALTERATION\nDominant"),
-            (ax_sulf, "SULFIDE\n%"),
-            (ax_rqd, "RQD\n%"),
-            (ax_struct, "STRUCTURE\nSymbols"),
-            (ax_model, "ORE MODEL\nInterpretation"),
-            (ax_note, "TECHNICAL DETERMINATION")
-        ]:
-            add_panel_title(ax, title)
-
-        ax_lith.set_xlim(0, 1)
-        ax_code.set_xlim(0, 1)
-        ax_desc.set_xlim(0, 1)
-        ax_alt.set_xlim(0, 1)
-        ax_sulf.set_xlim(0, 15)
-        ax_rqd.set_xlim(0, 100)
-        ax_struct.set_xlim(0, 1)
-        ax_model.set_xlim(0, 1)
-        ax_note.set_xlim(0, 1)
-
-        ax_lith.set_xticks([])
-        ax_code.set_xticks([])
-        ax_desc.axis("off")
-        ax_alt.set_xticks([])
-        ax_struct.set_xticks([])
-        ax_model.axis("off")
-        ax_note.axis("off")
-        ax_sulf.set_facecolor("#fffaf0")
-
-        model_color_map = {
-            model: plt.cm.tab20(i / max(1, len(ORE_MODELS)))
-            for i, model in enumerate(ORE_MODELS.keys())
-        }
-
-        for _, r in df.iterrows():
-            h = r["Thickness"]
-            y = r["Mid"]
-
-            ax_lith.add_patch(patches.Rectangle(
-                (0, r["From"]), 1, h,
-                facecolor=r["Lith Color"],
-                edgecolor="#111827",
-                linewidth=0.8,
-                hatch=r["Lith Hatch"]
-            ))
-
-            ax_code.text(
-                0.5, y, r["Code"],
-                ha="center", va="center",
-                fontsize=8.5,
-                fontweight="bold",
-                bbox=dict(facecolor="white", edgecolor="#cbd5e1", boxstyle="round,pad=0.22")
+            edited = st.data_editor(
+                df[editable_cols],
+                use_container_width=True,
+                num_rows="dynamic",
+                height=420,
             )
 
-            desc = f"{r['Lithology TR']}\n{r['Group']}"
-            ax_desc.text(0.05, y, textwrap.fill(desc, 21), ha="left", va="center", fontsize=8.2, fontweight="bold")
+            for i in edited.index:
+                code = normalize_code(edited.at[i, "LithCode"])
+                edited.at[i, "LithCode"] = code
+                name, color, hatch = LITHOLOGY_STYLE[code]
+                edited.at[i, "Color"] = color
+                edited.at[i, "Hatch"] = hatch
+                edited.at[i, "AltColor"] = alteration_color(str(edited.at[i, "Alteration"]).split(","))
+                edited.at[i, "Thickness"] = float(edited.at[i, "To"]) - float(edited.at[i, "From"])
+                edited.at[i, "Mid"] = (float(edited.at[i, "To"]) + float(edited.at[i, "From"])) / 2
+                edited.at[i, "SulfideConfidence"] = "visual estimate"
 
-            ax_alt.add_patch(patches.Rectangle(
-                (0, r["From"]), 1, h,
-                facecolor=r["Alt Color"],
-                edgecolor="#111827",
-                linewidth=0.7,
-                hatch=r["Alt Hatch"],
-                alpha=0.95
-            ))
-            ax_alt.text(0.5, y, textwrap.fill(r["Alteration"], 13), ha="center", va="center", fontsize=7.4, fontweight="bold")
+            if st.button("📊 Generate master log figure", use_container_width=True):
+                fig = make_master_log(edited, project, location, hole_id, azdip, date_txt)
+                st.pyplot(fig)
 
-            py, cpy, gn, sp = r["Py"], r["Cpy"], r["Gn"], r["Sp"]
-            ax_sulf.barh(y, py, height=h * 0.68, color="#f9dc5c", edgecolor="#b08900", label="Py" if "Py" not in ax_sulf.get_legend_handles_labels()[1] else "")
-            ax_sulf.barh(y, cpy, left=py, height=h * 0.68, color="#e67e22", edgecolor="#a0522d", label="Cpy" if "Cpy" not in ax_sulf.get_legend_handles_labels()[1] else "")
-            ax_sulf.barh(y, gn, left=py + cpy, height=h * 0.68, color="#7b8794", edgecolor="#334155", label="Gn" if "Gn" not in ax_sulf.get_legend_handles_labels()[1] else "")
-            ax_sulf.barh(y, sp, left=py + cpy + gn, height=h * 0.68, color="#a3b18a", edgecolor="#344e41", label="Sp" if "Sp" not in ax_sulf.get_legend_handles_labels()[1] else "")
+                png = io.BytesIO()
+                fig.savefig(png, format="png", dpi=300, bbox_inches="tight")
 
-            for j in range(3):
-                yy = r["From"] + (j + 1) * h / 4
-                draw_structural_symbol(ax_struct, 0.22, 0.78, yy, r["Structure"])
+                st.download_button(
+                    "Download PNG",
+                    data=png.getvalue(),
+                    file_name=f"{hole_id}_ai_master_log.png",
+                    mime="image/png",
+                    use_container_width=True,
+                )
 
-            ax_model.add_patch(patches.Rectangle(
-                (0, r["From"]), 1, h,
-                facecolor=model_color_map.get(r["Ore Model"], "#e5e7eb"),
-                edgecolor="white",
-                alpha=0.85
-            ))
-            ax_model.text(0.5, y, textwrap.fill(r["Ore Model"], 12), ha="center", va="center", fontsize=7.2, fontweight="bold")
+                csv = edited.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download CSV",
+                    data=csv,
+                    file_name=f"{hole_id}_ai_logging_table.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 
-            ore_sum_value = py + cpy + gn + sp
-            bg = "#fff7ed" if ore_sum_value > 3 else "#f8fafc"
-            edge = "#f97316" if ore_sum_value > 3 else "#cbd5e1"
-
-            note = (
-                f"{r['From']:.1f}-{r['To']:.1f} m | {r['Lithology']} | Alt: {r['Alteration']} | "
-                f"Structure: {r['Structure']} | TCR {r['TCR']}% | RQD {r['RQD']}% | "
-                f"Py {py}%, Cpy {cpy}%, Gn {gn}%, Sp {sp}% | "
-                f"Model: {r['Ore Model']} | Pathfinder: {r['Pathfinder']} | "
-                f"Sampling: {r['Sampling']} | Drill: {r['Drill']}"
-            )
-
-            ax_note.text(
-                0.01, y,
-                textwrap.fill(note, 90),
-                ha="left",
-                va="center",
-                fontsize=7.1,
-                linespacing=1.25,
-                bbox=dict(facecolor=bg, edgecolor=edge, boxstyle="square,pad=0.35", linewidth=0.9)
-            )
-
-        ax_rqd.plot(df["RQD"], df["Mid"], color="#0f2742", marker="o", lw=2.1, markersize=4.5)
-        ax_sulf.legend(loc="upper right", fontsize=6.5, framealpha=1)
-
-        fig.subplots_adjust(top=0.91, bottom=0.035, left=0.035, right=0.985)
-
-        st.pyplot(fig)
-
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=240, bbox_inches="tight")
-        buf.seek(0)
-
-        st.download_button(
-            "📥 Download High-Resolution Dashboard PNG",
-            data=buf,
-            file_name=f"{hole_id}_master_dashboard.png",
-            mime="image/png",
-            use_container_width=True
-        )
-
-elif run and not uploaded_files:
-    st.warning("Önce görsel yüklemelisin.")
+else:
+    with right:
+        st.info("Karot fotoğraflarını yükle, her fotoğraf için From-To metraj gir, sonra AI analizini çalıştır.")
